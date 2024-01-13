@@ -1,4 +1,4 @@
-# OpenBS-Netcat
+# OpenBSD-Netcat
 
 Added ability to select network interface `-e` flag.
 
