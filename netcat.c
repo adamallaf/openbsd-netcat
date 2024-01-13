@@ -34,15 +34,18 @@
 
 #define _GNU_SOURCE
 
+#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/un.h>
 
+#include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/ip.h>
 #include <arpa/telnet.h>
+#include <arpa/inet.h>
 #ifdef __linux__
 # include <linux/in6.h>
 #endif
@@ -138,6 +141,7 @@
 /* Command Line Options */
 int	bflag;					/* Allow Broadcast */
 int	dflag;					/* detached, no stdin */
+char   *eflag;					/* Interface Name */
 int	Fflag;					/* fdpass sock to stdout */
 unsigned int iflag;				/* Interval Flag */
 int	kflag;					/* More than one connect */
@@ -273,7 +277,7 @@ main(int argc, char *argv[])
 #ifdef HAVE_TLS
 	    "46bC:cDde:FH:hI:i:K:klM:m:NnO:o:P:p:q:R:rSs:T:tUuV:vW:w:X:x:Z:z"))
 #else
-	    "46bCDdFhI:i:klM:m:NnO:P:p:q:rSs:T:tUuV:vW:w:X:x:Zz"))
+	    "46bCDde:FhI:i:klM:m:NnO:P:p:q:rSs:T:tUuV:vW:w:X:x:Zz"))
 #endif
 	    != -1) {
 		switch (ch) {
@@ -323,6 +327,9 @@ main(int argc, char *argv[])
 			tls_expectname = optarg;
 			break;
 #endif
+		case 'e':
+			eflag = optarg;
+			break;
 		case 'F':
 			Fflag = 1;
 			break;
@@ -524,7 +531,8 @@ main(int argc, char *argv[])
 			uport = argv;
 		}
 	} else if (argc >= 2) {
-		if (lflag && (pflag || sflag || argc > 2))
+		// AdamAllaf TODO: check if eflag really conflict with lflag
+		if (lflag && (pflag || eflag || sflag || argc > 2))
 			usage(1); /* conflict */
 		host = argv[0];
 		uport = &argv[1];
@@ -674,6 +682,9 @@ main(int argc, char *argv[])
 
 		if (sflag)
 			errx(1, "no proxy support for local source address");
+
+		if (eflag)  // AdamAllaf TODO: check if proxy can be supported
+			errx(1, "no proxy support for interface binding");
 
 		if (*proxy == '[') {
 			++proxy;
@@ -1248,6 +1259,44 @@ remote_connect(const char *host, const char *port, struct addrinfo hints,
 			}
 			ahints.ai_flags = AI_PASSIVE;
 			if ((error = getaddrinfo(sflag, pflag, &ahints, &ares)))
+				errx(1, "getaddrinfo: %s", gai_strerror(error));
+
+			if (bind(s, (struct sockaddr *)ares->ai_addr,
+			    ares->ai_addrlen) == -1)
+				err(1, "bind failed");
+			freeaddrinfo(ares);
+		}
+
+		// AdamAllaf TODO: eflag & sflag should be mutually exclusive
+		if (eflag) {
+			struct addrinfo ahints, *ares;
+			struct ifreq ifr;
+			memset(&ifr, 0, sizeof(ifr));
+			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), eflag);
+			setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(ifr));
+			//
+			memset(&ahints, 0, sizeof(struct addrinfo));
+			ahints.ai_family = res->ai_family;
+			if (uflag) {
+				ahints.ai_socktype = SOCK_DGRAM;
+				ahints.ai_protocol = IPPROTO_UDP;
+			}
+#if defined(IPPROTO_DCCP) && defined(SOCK_DCCP)
+			else if (dccpflag) {
+				hints.ai_socktype = SOCK_DCCP;
+				hints.ai_protocol = IPPROTO_DCCP;
+			}
+#endif
+			else {
+				ahints.ai_socktype = SOCK_STREAM;
+				ahints.ai_protocol = IPPROTO_TCP;
+			}
+			ahints.ai_flags = AI_PASSIVE;
+			if ((error = ioctl(s, SIOCGIFADDR, &ifr)))
+				errx(1, "ioctl: %s", gai_strerror(error));
+			struct sockaddr_in *addr = (struct sockaddr_in *)&(ifr.ifr_addr);
+			char *ifaddress = inet_ntoa(addr->sin_addr);
+			if ((error = getaddrinfo(ifaddress, pflag, &ahints, &ares)))
 				errx(1, "getaddrinfo: %s", gai_strerror(error));
 
 			if (bind(s, (struct sockaddr *)ares->ai_addr,
@@ -2279,6 +2328,7 @@ help(void)
 	\t-C		Send CRLF as line-ending\n\
 	\t-D		Enable the debug socket option\n\
 	\t-d		Detach from stdin\n\
+	\t-e iface	Use specified interface\n\
 	\t-F		Pass socket fd\n\
 	\t-h		This help text\n\
 	\t-I length	TCP receive buffer length\n\
@@ -2317,7 +2367,7 @@ usage(int ret)
 {
 	fprintf(stderr,
 	    "usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]\n"
-	    "\t  [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
+	    "\t  [-e iface] [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
 	    "\t  [-q seconds] [-s sourceaddr] [-T keyword] [-V rtable] [-W recvlimit]\n"
 	    "\t  [-w timeout] [-X proxy_protocol] [-x proxy_address[:port]]\n"
 	    "\t  [destination] [port]\n");
