@@ -531,7 +531,6 @@ main(int argc, char *argv[])
 			uport = argv;
 		}
 	} else if (argc >= 2) {
-		// AdamAllaf TODO: check if Bflag really conflict with lflag
 		if (lflag && (pflag || Bflag || sflag || argc > 2))
 			usage(1); /* conflict */
 		host = argv[0];
@@ -683,7 +682,7 @@ main(int argc, char *argv[])
 		if (sflag)
 			errx(1, "no proxy support for local source address");
 
-		if (Bflag)  // AdamAllaf TODO: check if proxy can be supported
+		if (Bflag)
 			errx(1, "no proxy support for interface binding");
 
 		if (*proxy == '[') {
