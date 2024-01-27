@@ -1461,6 +1461,15 @@ local_listen(const char *host, const char *port, struct addrinfo hints)
 			warn("Couldn't set SO_REUSEPORT");
 #endif
 
+		if (Bflag) {
+			struct ifreq ifr;
+			memset(&ifr, 0, sizeof(struct ifreq));
+			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), Bflag);
+			if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(struct ifreq)) == -1) {
+				errx(1, "%s: \"%s\"", strerror(errno), ifr.ifr_name);
+			}
+		}
+
 		set_common_sockopts(s, res->ai_addr);
 
 		if (bind(s, (struct sockaddr *)res->ai_addr,
