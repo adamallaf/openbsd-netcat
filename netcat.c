@@ -141,7 +141,7 @@
 /* Command Line Options */
 int	bflag;					/* Allow Broadcast */
 int	dflag;					/* detached, no stdin */
-char   *eflag;					/* Interface Name */
+char   *Bflag;					/* Interface Name */
 int	Fflag;					/* fdpass sock to stdout */
 unsigned int iflag;				/* Interval Flag */
 int	kflag;					/* More than one connect */
@@ -277,7 +277,7 @@ main(int argc, char *argv[])
 #ifdef HAVE_TLS
 	    "46bC:cDde:FH:hI:i:K:klM:m:NnO:o:P:p:q:R:rSs:T:tUuV:vW:w:X:x:Z:z"))
 #else
-	    "46bCDde:FhI:i:klM:m:NnO:P:p:q:rSs:T:tUuV:vW:w:X:x:Zz"))
+	    "46bB:CDdFhI:i:klM:m:NnO:P:p:q:rSs:T:tUuV:vW:w:X:x:Zz"))
 #endif
 	    != -1) {
 		switch (ch) {
@@ -293,6 +293,9 @@ main(int argc, char *argv[])
 #else
 			errx(1, "no broadcast frame support available");
 #endif
+			break;
+		case 'B':
+			Bflag = optarg;
 			break;
 		case 'U':
 			family = AF_UNIX;
@@ -327,9 +330,6 @@ main(int argc, char *argv[])
 			tls_expectname = optarg;
 			break;
 #endif
-		case 'e':
-			eflag = optarg;
-			break;
 		case 'F':
 			Fflag = 1;
 			break;
@@ -531,8 +531,8 @@ main(int argc, char *argv[])
 			uport = argv;
 		}
 	} else if (argc >= 2) {
-		// AdamAllaf TODO: check if eflag really conflict with lflag
-		if (lflag && (pflag || eflag || sflag || argc > 2))
+		// AdamAllaf TODO: check if Bflag really conflict with lflag
+		if (lflag && (pflag || Bflag || sflag || argc > 2))
 			usage(1); /* conflict */
 		host = argv[0];
 		uport = &argv[1];
@@ -683,7 +683,7 @@ main(int argc, char *argv[])
 		if (sflag)
 			errx(1, "no proxy support for local source address");
 
-		if (eflag)  // AdamAllaf TODO: check if proxy can be supported
+		if (Bflag)  // AdamAllaf TODO: check if proxy can be supported
 			errx(1, "no proxy support for interface binding");
 
 		if (*proxy == '[') {
@@ -1267,14 +1267,16 @@ remote_connect(const char *host, const char *port, struct addrinfo hints,
 			freeaddrinfo(ares);
 		}
 
-		// AdamAllaf TODO: eflag & sflag should be mutually exclusive
-		if (eflag) {
+		// AdamAllaf TODO: Bflag & sflag should be mutually exclusive
+		if (Bflag) {
 			struct addrinfo ahints, *ares;
 			struct ifreq ifr;
 			memset(&ifr, 0, sizeof(ifr));
-			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), eflag);
-			setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(ifr));
-			//
+			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), Bflag);
+			if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(ifr)) < 0) {
+				errx(1, "%s: \"%s\"", strerror(errno), ifr.ifr_name);
+			}
+
 			memset(&ahints, 0, sizeof(struct addrinfo));
 			ahints.ai_family = res->ai_family;
 			if (uflag) {
@@ -2325,10 +2327,10 @@ help(void)
 	\t-4		Use IPv4\n\
 	\t-6		Use IPv6\n\
 	\t-b		Allow broadcast\n\
+	\t-B iface	Bind to sepcified interface\n\
 	\t-C		Send CRLF as line-ending\n\
 	\t-D		Enable the debug socket option\n\
 	\t-d		Detach from stdin\n\
-	\t-e iface	Use specified interface\n\
 	\t-F		Pass socket fd\n\
 	\t-h		This help text\n\
 	\t-I length	TCP receive buffer length\n\
@@ -2367,7 +2369,7 @@ usage(int ret)
 {
 	fprintf(stderr,
 	    "usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]\n"
-	    "\t  [-e iface] [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
+	    "\t  [-B iface] [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
 	    "\t  [-q seconds] [-s sourceaddr] [-T keyword] [-V rtable] [-W recvlimit]\n"
 	    "\t  [-w timeout] [-X proxy_protocol] [-x proxy_address[:port]]\n"
 	    "\t  [destination] [port]\n");

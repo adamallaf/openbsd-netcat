@@ -1,8 +1,8 @@
 # OpenBSD-Netcat
 
-Added ability to select network interface `-e` flag.
+Added ability to bind to specified network interface `-B` flag.
 
 Usage:
 ```bash
-./nc -e tun0 x.x.x.x port
+./nc -B tun0 x.x.x.x port
 ```
