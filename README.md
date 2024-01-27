@@ -1,6 +1,6 @@
 # OpenBSD-Netcat
 
-Added ability to bind to specified network interface `-B` flag.
+Added ability to bind to specified network interface with `-B` flag.
 
 Usage:
 ```bash
