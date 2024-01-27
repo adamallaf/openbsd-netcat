@@ -1233,49 +1233,24 @@ remote_connect(const char *host, const char *port, struct addrinfo hints,
 		    SOCK_NONBLOCK, res->ai_protocol)) == -1)
 			continue;
 
-		/* Bind to a local port or source address if specified. */
-		if (sflag || pflag) {
-			struct addrinfo ahints, *ares;
-
-#ifdef SO_BINDANY
-			/* try SO_BINDANY, but don't insist */
-			setsockopt(s, SOL_SOCKET, SO_BINDANY, &on, sizeof(on));
-#endif
-			memset(&ahints, 0, sizeof(struct addrinfo));
-			ahints.ai_family = res->ai_family;
-			if (uflag) {
-				ahints.ai_socktype = SOCK_DGRAM;
-				ahints.ai_protocol = IPPROTO_UDP;
-			}
-#if defined(IPPROTO_DCCP) && defined(SOCK_DCCP)
-			else if (dccpflag) {
-				hints.ai_socktype = SOCK_DCCP;
-				hints.ai_protocol = IPPROTO_DCCP;
-			}
-#endif
-			else {
-				ahints.ai_socktype = SOCK_STREAM;
-				ahints.ai_protocol = IPPROTO_TCP;
-			}
-			ahints.ai_flags = AI_PASSIVE;
-			if ((error = getaddrinfo(sflag, pflag, &ahints, &ares)))
-				errx(1, "getaddrinfo: %s", gai_strerror(error));
-
-			if (bind(s, (struct sockaddr *)ares->ai_addr,
-			    ares->ai_addrlen) == -1)
-				err(1, "bind failed");
-			freeaddrinfo(ares);
-		}
-
-		// AdamAllaf TODO: Bflag & sflag should be mutually exclusive
-		if (Bflag) {
+		/* Bind to a local port or source address or interface if specified. */
+		if (sflag || pflag || Bflag) {
 			struct addrinfo ahints, *ares;
 			struct ifreq ifr;
-			memset(&ifr, 0, sizeof(ifr));
-			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), Bflag);
-			if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(ifr)) < 0) {
-				errx(1, "%s: \"%s\"", strerror(errno), ifr.ifr_name);
+
+			if (Bflag) {
+				memset(&ifr, 0, sizeof(struct ifreq));
+				snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), Bflag);
+				if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(struct ifreq)) < 0) {
+					errx(1, "%s: \"%s\"", strerror(errno), ifr.ifr_name);
+				}
 			}
+#ifdef SO_BINDANY
+			else {
+				/* try SO_BINDANY, but don't insist */
+				setsockopt(s, SOL_SOCKET, SO_BINDANY, &on, sizeof(on));
+			}
+#endif
 
 			memset(&ahints, 0, sizeof(struct addrinfo));
 			ahints.ai_family = res->ai_family;
@@ -1294,10 +1269,14 @@ remote_connect(const char *host, const char *port, struct addrinfo hints,
 				ahints.ai_protocol = IPPROTO_TCP;
 			}
 			ahints.ai_flags = AI_PASSIVE;
-			if ((error = ioctl(s, SIOCGIFADDR, &ifr)))
-				errx(1, "ioctl: %s", gai_strerror(error));
-			struct sockaddr_in *addr = (struct sockaddr_in *)&(ifr.ifr_addr);
-			char *ifaddress = inet_ntoa(addr->sin_addr);
+			
+			char *ifaddress = sflag;
+			if (sflag == 0) {
+				if ((error = ioctl(s, SIOCGIFADDR, &ifr)))
+					errx(1, "ioctl: %s", gai_strerror(error));
+				struct sockaddr_in *addr = (struct sockaddr_in *)&(ifr.ifr_addr);
+				ifaddress = inet_ntoa(addr->sin_addr);
+			}
 			if ((error = getaddrinfo(ifaddress, pflag, &ahints, &ares)))
 				errx(1, "getaddrinfo: %s", gai_strerror(error));
 
