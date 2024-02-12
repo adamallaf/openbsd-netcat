@@ -34,6 +34,7 @@
 .Sh SYNOPSIS
 .Nm nc
 .Op Fl 46bCDdFhklNnrStUuvZz
+.Op Fl B Ar device
 .Op Fl I Ar length
 .Op Fl i Ar interval
 .Op Fl M Ar ttl
@@ -93,6 +94,8 @@ The options are as follows:
 Use IPv4 addresses only.
 .It Fl 6
 Use IPv6 addresses only.
+.It Fl B Ar device
+Bind socket to network device.
 .It Fl b
 Allow broadcast.
 .It Fl C
@@ -537,6 +540,15 @@ Open a TCP connection to port 42 of host.example.com using 10.1.2.3 as the
 IP for the local end of the connection:
 .Pp
 .Dl $ nc -s 10.1.2.3 host.example.com 42
+.Pp
+Open a TCP connection to port 68 of host.example.com using 10.1.2.3 as the
+source IP and initiate the connection from eth1 network device:
+.Pp
+.Dl $ nc -B eth1 -s 10.1.2.3 host.example.com 68
+.Pp
+Listen to 8080 only on eth2 network device:
+.Pp
+.Dl $ nc -B eth2 -l 8080
 .Pp
 Create and listen on a
 .Ux Ns -domain

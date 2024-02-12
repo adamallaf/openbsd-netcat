@@ -1,4 +1,4 @@
-/* $OpenBSD: netcat.c,v 1.219 2022/06/08 20:07:31 tb Exp $ */
+/* $OpenBSD: netcat.c,v 1.226 2023/08/14 08:07:27 tb Exp $ */
 /*
  * Copyright (c) 2001 Eric Jackson <ericj@monkey.org>
  * Copyright (c) 2015 Bob Beck.  All rights reserved.
@@ -35,6 +35,7 @@
 #define _GNU_SOURCE
 
 #include <sys/ioctl.h>
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -44,8 +45,8 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/ip.h>
-#include <arpa/telnet.h>
 #include <arpa/inet.h>
+#include <arpa/telnet.h>
 #ifdef __linux__
 # include <linux/in6.h>
 #endif
@@ -140,8 +141,8 @@
 
 /* Command Line Options */
 int	bflag;					/* Allow Broadcast */
+char   *Bflag;					/* Bind socket to network device */
 int	dflag;					/* detached, no stdin */
-char   *Bflag;					/* Interface Name */
 int	Fflag;					/* fdpass sock to stdout */
 unsigned int iflag;				/* Interval Flag */
 int	kflag;					/* More than one connect */
@@ -173,7 +174,7 @@ const char    *Kflag;				/* Private key file */
 const char    *oflag;				/* OCSP stapling file */
 const char    *Rflag;				/* Root CA file */
 int	tls_cachanged;				/* Using non-default CA file */
-int     TLSopt;					/* TLS options */
+int	TLSopt;					/* TLS options */
 char	*tls_expectname;			/* required name in peer cert */
 char	*tls_expecthash;			/* required hash of peer cert */
 char	*tls_ciphers;				/* TLS ciphers */
@@ -214,6 +215,7 @@ int	socks_connect(const char *, const char *, struct addrinfo,
 	    const char *, const char *, struct addrinfo, int, const char *);
 int	udptest(int);
 int	unix_setup_sockaddr(char *, struct sockaddr_un *, int *);
+void	connection_info(const char *, const char *, const char *, const char *);
 int	unix_bind(char *, int);
 int	unix_connect(char *);
 int	unix_listen(char *);
@@ -249,7 +251,6 @@ main(int argc, char *argv[])
 	char *host, **uport;
 	char ipaddr[NI_MAXHOST];
 	struct addrinfo hints;
-	struct servent *sv;
 	socklen_t len;
 	struct sockaddr_storage cliaddr;
 	char *proxy = NULL, *proxyport = NULL;
@@ -266,7 +267,6 @@ main(int argc, char *argv[])
 	socksv = 5;
 	host = NULL;
 	uport = NULL;
-	sv = NULL;
 #ifdef HAVE_TLS
 	Rflag = tls_default_ca_cert_file();
 #endif
@@ -275,7 +275,7 @@ main(int argc, char *argv[])
 
 	while ((ch = getopt(argc, argv,
 #ifdef HAVE_TLS
-	    "46bC:cDde:FH:hI:i:K:klM:m:NnO:o:P:p:q:R:rSs:T:tUuV:vW:w:X:x:Z:z"))
+	    "46bB:C:cDde:FH:hI:i:K:klM:m:NnO:o:P:p:q:R:rSs:T:tUuV:vW:w:X:x:Z:z"))
 #else
 	    "46bB:CDdFhI:i:klM:m:NnO:P:p:q:rSs:T:tUuV:vW:w:X:x:Zz"))
 #endif
@@ -531,7 +531,7 @@ main(int argc, char *argv[])
 			uport = argv;
 		}
 	} else if (argc >= 2) {
-		if (lflag && (pflag || Bflag || sflag || argc > 2))
+		if (lflag && (pflag || sflag || Bflag || argc > 2))
 			usage(1); /* conflict */
 		host = argv[0];
 		uport = &argv[1];
@@ -683,7 +683,7 @@ main(int argc, char *argv[])
 			errx(1, "no proxy support for local source address");
 
 		if (Bflag)
-			errx(1, "no proxy support for interface binding");
+			errx(1, "no proxy support for device binding");
 
 		if (*proxy == '[') {
 			++proxy;
@@ -919,38 +919,22 @@ main(int argc, char *argv[])
 				continue;
 
 			ret = 0;
-			if (vflag) {
+			if (vflag || zflag) {
+				int print_info = 1;
+
 				/* For UDP, make sure we are connected. */
 				if (uflag) {
-					if (udptest(s) == -1) {
+					/* No info on failed or skipped test. */
+					if ((print_info = udptest(s)) == -1) {
 						ret = 1;
 						continue;
 					}
 				}
-
-				char *proto = proto_name(uflag, dccpflag);
-				/* Don't look up port if -n. */
-				if (nflag)
-					sv = NULL;
-				else {
-					sv = getservbyport(
-					    ntohs(atoi(portlist[i])),
-					    proto);
+				if (print_info == 1) {
+					char *proto = proto_name(uflag, dccpflag);
+					connection_info(host, portlist[i],
+					    proto, ipaddr);
 				}
-
-				fprintf(stderr, "Connection to %s", host);
-
-				/*
-				 * if we aren't connecting thru a proxy and
-				 * there is something to report, print IP
-				 */
-				if (!nflag && !xflag &&
-				    strcmp(host, ipaddr) != 0)
-					fprintf(stderr, " (%s)", ipaddr);
-
-				fprintf(stderr, " %s port [%s/%s] succeeded!\n",
-				    portlist[i], proto,
-				    sv ? sv->s_name : "*");
 			}
 			if (Fflag)
 				fdpass(s);
@@ -1232,14 +1216,14 @@ remote_connect(const char *host, const char *port, struct addrinfo hints,
 		    SOCK_NONBLOCK, res->ai_protocol)) == -1)
 			continue;
 
-		/* Bind to a local port or source address or interface if specified. */
+		/* Bind to a local port or source address or network device if specified. */
 		if (sflag || pflag || Bflag) {
 			struct addrinfo ahints, *ares;
 			struct ifreq ifr;
 
 			if (Bflag) {
 				memset(&ifr, 0, sizeof(struct ifreq));
-				snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), Bflag);
+				memcpy(ifr.ifr_name, Bflag, MIN(strlen(Bflag) + 1, sizeof(ifr.ifr_name)));
 				if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(struct ifreq)) < 0) {
 					errx(1, "%s: \"%s\"", strerror(errno), ifr.ifr_name);
 				}
@@ -1250,7 +1234,6 @@ remote_connect(const char *host, const char *port, struct addrinfo hints,
 				setsockopt(s, SOL_SOCKET, SO_BINDANY, &on, sizeof(on));
 			}
 #endif
-
 			memset(&ahints, 0, sizeof(struct addrinfo));
 			ahints.ai_family = res->ai_family;
 			if (uflag) {
@@ -1268,14 +1251,15 @@ remote_connect(const char *host, const char *port, struct addrinfo hints,
 				ahints.ai_protocol = IPPROTO_TCP;
 			}
 			ahints.ai_flags = AI_PASSIVE;
-			
+
 			char *ifaddress = sflag;
-			if (sflag == 0) {
+			if (sflag == 0 && Bflag) {
 				if ((error = ioctl(s, SIOCGIFADDR, &ifr)))
 					errx(1, "ioctl: %s", gai_strerror(error));
 				struct sockaddr_in *addr = (struct sockaddr_in *)&(ifr.ifr_addr);
 				ifaddress = inet_ntoa(addr->sin_addr);
 			}
+
 			if ((error = getaddrinfo(ifaddress, pflag, &ahints, &ares)))
 				errx(1, "getaddrinfo: %s", gai_strerror(error));
 
@@ -1459,11 +1443,10 @@ local_listen(const char *host, const char *port, struct addrinfo hints)
 		if (ret == -1)
 			warn("Couldn't set SO_REUSEPORT");
 #endif
-
 		if (Bflag) {
 			struct ifreq ifr;
 			memset(&ifr, 0, sizeof(struct ifreq));
-			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), Bflag);
+			memcpy(ifr.ifr_name, Bflag, MIN(strlen(Bflag) + 1, sizeof(ifr.ifr_name)));
 			if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(struct ifreq)) == -1) {
 				errx(1, "%s: \"%s\"", strerror(errno), ifr.ifr_name);
 			}
@@ -1596,7 +1579,7 @@ delay_exit:
 			pfd[POLL_NETIN].fd = -1;
 
 		if (pfd[POLL_NETOUT].revents & POLLHUP) {
-			if (Nflag)
+			if (pfd[POLL_NETOUT].fd != -1 && Nflag)
 				shutdown(pfd[POLL_NETOUT].fd, SHUT_WR);
 			pfd[POLL_NETOUT].fd = -1;
 		}
@@ -1690,7 +1673,7 @@ delay_exit:
 			if (netinbufpos == BUFSIZE)
 				pfd[POLL_NETIN].events = 0;
 			/* handle telnet */
-			if (tflag)
+			if (pfd[POLL_NETIN].fd != -1 && tflag)
 				atelnet(pfd[POLL_NETIN].fd, netinbuf,
 				    netinbufpos);
 		}
@@ -1744,6 +1727,9 @@ drainbuf(int fd, unsigned char *buf, size_t *bufpos, int oneline)
 	ssize_t adjust;
 	unsigned char *lf = NULL;
 
+	if (fd == -1)
+		return -1;
+
 	if (oneline)
 		lf = memchr(buf, '\n', *bufpos);
 	if (lf == NULL) {
@@ -1789,6 +1775,9 @@ fillbuf(int fd, unsigned char *buf, size_t *bufpos)
 {
 	size_t num = BUFSIZE - *bufpos;
 	ssize_t n;
+
+	if (fd == -1)
+		return -1;
 
 #ifdef HAVE_TLS
 	if (tls) {
@@ -1996,6 +1985,10 @@ udptest(int s)
 {
 	int i, t;
 
+	/* Only write to the socket in scan mode or interactive mode. */
+	if (!zflag && !isatty(STDIN_FILENO))
+		return 0;
+
 	if ((write(s, "X", 1) != 1) ||
 	    ((write(s, "X", 1) != 1) && (errno == ECONNREFUSED)))
 		return -1;
@@ -2008,6 +2001,32 @@ udptest(int s)
 			return -1;
 	}
 	return 1;
+}
+
+void
+connection_info(const char *host, const char *port, const char *proto,
+    const char *ipaddr)
+{
+	struct servent *sv;
+	char *service = "*";
+
+	/* Look up service name unless -n. */
+	if (!nflag) {
+		sv = getservbyport(ntohs(atoi(port)), proto);
+		if (sv != NULL)
+			service = sv->s_name;
+	}
+
+	fprintf(stderr, "Connection to %s", host);
+
+	/*
+	 * if we aren't connecting thru a proxy and
+	 * there is something to report, print IP
+	 */
+	if (!nflag && !xflag && strcmp(host, ipaddr) != 0)
+		fprintf(stderr, " (%s)", ipaddr);
+
+	fprintf(stderr, " %s port [%s/%s] succeeded!\n", port, proto, service);
 }
 
 void
@@ -2313,8 +2332,8 @@ help(void)
 	fprintf(stderr, "\tCommand Summary:\n\
 	\t-4		Use IPv4\n\
 	\t-6		Use IPv6\n\
+	\t-B device	Bind socket to network device\n\
 	\t-b		Allow broadcast\n\
-	\t-B iface	Bind to sepcified interface\n\
 	\t-C		Send CRLF as line-ending\n\
 	\t-D		Enable the debug socket option\n\
 	\t-d		Detach from stdin\n\
@@ -2355,8 +2374,8 @@ void
 usage(int ret)
 {
 	fprintf(stderr,
-	    "usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]\n"
-	    "\t  [-B iface] [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
+	    "usage: nc [-46bCDdFhklNnrStUuvZz] [-B device] [-I length] [-i interval] [-M ttl]\n"
+	    "\t  [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
 	    "\t  [-q seconds] [-s sourceaddr] [-T keyword] [-V rtable] [-W recvlimit]\n"
 	    "\t  [-w timeout] [-X proxy_protocol] [-x proxy_address[:port]]\n"
 	    "\t  [destination] [port]\n");
