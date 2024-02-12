@@ -21,5 +21,5 @@ init connection using address 127.0.0.222, port 8080 and bind to `lo` interface
 
 listen on `eth2` interface only
 ```bash
-./nc -B eth2 -lvp 80
+./nc -B eth2 -lv 80
 ```
